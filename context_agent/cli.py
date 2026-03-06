@@ -11,7 +11,7 @@ from mcp_agent.logging.transport import AsyncEventBus
 from context_agent.adapters.claude_hook import build_hook_output, dump_hook_output, parse_hook_payload
 from context_agent.app import build_app
 from context_agent.config import AppConfig
-from context_agent.debug_log import append_hook_log
+from context_agent.debug_log import DEFAULT_HOOK_LOG_PATH, append_hook_log, configure_hook_log_path, reset_hook_log_path
 from context_agent.logging_config import configure_logging
 from context_agent.workflows.build_context import build_context
 
@@ -23,17 +23,11 @@ def main(argv: list[str] | None = None) -> int:
 async def async_main(argv: list[str] | None = None) -> int:
     """命令行入口。"""
 
-    parser = argparse.ArgumentParser(description="Build context for Claude Code hooks.")
-    parser.add_argument("--input", help="JSON 输入文件路径。")
-    parser.add_argument("--cwd", help="覆盖工作目录。")
-    parser.add_argument("--llm-base-url", help="覆盖 LLM base URL。")
-    parser.add_argument("--llm-model", help="覆盖默认 model。")
-    parser.add_argument("--gate-model", help="覆盖 gate model。")
-    parser.add_argument("--judge-model", help="覆盖 judge model。")
-    parser.add_argument("--summary-model", help="覆盖 summary model。")
+    parser = _build_parser()
     args = parser.parse_args(argv)
 
     configure_logging()
+    _configure_hook_logging(args.log)
     raw_payload = _read_payload(args.input)
     append_hook_log("cli_input", {"input_path": args.input, "raw_payload": raw_payload})
     hook_input = parse_hook_payload(raw_payload, fallback_cwd=args.cwd)
@@ -79,6 +73,32 @@ async def async_main(argv: list[str] | None = None) -> int:
     sys.stdout.write(output_json)
     sys.stdout.write("\n")
     return 0
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Build context for Claude Code hooks.")
+    parser.add_argument("--input", help="JSON 输入文件路径。")
+    parser.add_argument("--cwd", help="覆盖工作目录。")
+    parser.add_argument("--llm-base-url", help="覆盖 LLM base URL。")
+    parser.add_argument("--llm-model", help="覆盖默认 model。")
+    parser.add_argument("--gate-model", help="覆盖 gate model。")
+    parser.add_argument("--judge-model", help="覆盖 judge model。")
+    parser.add_argument("--summary-model", help="覆盖 summary model。")
+    parser.add_argument(
+        "--log",
+        nargs="?",
+        const=DEFAULT_HOOK_LOG_PATH,
+        help=f"启用 hook 调试日志；可选指定日志路径，默认 {DEFAULT_HOOK_LOG_PATH}。",
+    )
+    return parser
+
+
+def _configure_hook_logging(log_path: str | None) -> None:
+    """按启动参数初始化 hook 日志开关。"""
+
+    reset_hook_log_path()
+    if log_path is not None:
+        configure_hook_log_path(log_path)
 
 
 def _read_payload(input_path: str | None) -> str:

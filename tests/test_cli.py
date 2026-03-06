@@ -6,8 +6,9 @@ import unittest
 from pathlib import Path
 
 from context_agent.app import build_app
-from context_agent.cli import _shutdown_mcp_runtime
+from context_agent.cli import _build_parser, _configure_hook_logging, _shutdown_mcp_runtime
 from context_agent.config import AppConfig
+from context_agent.debug_log import DEFAULT_HOOK_LOG_PATH, get_hook_log_path, reset_hook_log_path
 from context_agent.schemas.hook_io import HookInput
 from context_agent.workflows.build_context import build_context
 
@@ -54,6 +55,27 @@ class CLIRuntimeCleanupTestCase(unittest.TestCase):
                 self.assertEqual(task_names, [])
 
             asyncio.run(run_case())
+
+
+class CLILogArgumentTestCase(unittest.TestCase):
+    def tearDown(self) -> None:
+        reset_hook_log_path()
+
+    def test_log_flag_uses_default_path(self) -> None:
+        parser = _build_parser()
+
+        args = parser.parse_args(["--log"])
+        _configure_hook_logging(args.log)
+
+        self.assertEqual(get_hook_log_path(), DEFAULT_HOOK_LOG_PATH)
+
+    def test_log_flag_accepts_custom_path(self) -> None:
+        parser = _build_parser()
+
+        args = parser.parse_args(["--log", "/tmp/ya_hooks.log"])
+        _configure_hook_logging(args.log)
+
+        self.assertEqual(get_hook_log_path(), "/tmp/ya_hooks.log")
 
 
 if __name__ == "__main__":

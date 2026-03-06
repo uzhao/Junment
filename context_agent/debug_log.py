@@ -7,13 +7,41 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-_DEFAULT_HOOK_LOG_PATH = "/tmp/hooks.log"
+DEFAULT_HOOK_LOG_PATH = "/tmp/hooks.log"
 _MAX_TEXT_LENGTH = 20000
 _WRITE_LOCK = threading.Lock()
+_UNSET = object()
+_hook_log_path_override: object | str | None = _UNSET
+
+
+def configure_hook_log_path(log_path: str | None) -> None:
+    """设置当前进程内的 hook 日志路径。"""
+
+    global _hook_log_path_override
+    _hook_log_path_override = log_path
+
+
+def reset_hook_log_path() -> None:
+    """重置日志路径覆盖，恢复环境变量回退。"""
+
+    global _hook_log_path_override
+    _hook_log_path_override = _UNSET
+
+
+def get_hook_log_path() -> str | None:
+    """获取当前启用的 hook 日志路径。"""
+
+    if _hook_log_path_override is not _UNSET:
+        return _hook_log_path_override
+    return os.environ.get("JUNMENT_HOOKS_LOG_PATH") or None
 
 
 def append_hook_log(stage: str, payload: Any) -> None:
     """追加写入 hook 调试日志。"""
+
+    log_path_value = get_hook_log_path()
+    if not log_path_value:
+        return
 
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -21,7 +49,7 @@ def append_hook_log(stage: str, payload: Any) -> None:
         "payload": _sanitize(payload),
     }
     try:
-        log_path = Path(os.environ.get("JUNMENT_HOOKS_LOG_PATH", _DEFAULT_HOOK_LOG_PATH))
+        log_path = Path(log_path_value)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with _WRITE_LOCK:
             with log_path.open("a", encoding="utf-8") as file:
