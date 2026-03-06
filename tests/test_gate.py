@@ -12,13 +12,14 @@ class _FakeModelClient:
         self.should_fail = should_fail
         self.can_call_result = can_call_result
         self.gate_model = "fake-gate"
+        self.calls: list[dict] = []
 
     def can_call(self, model: str | None) -> bool:
         _ = model
         return self.can_call_result
 
     async def complete_json(self, **kwargs) -> dict:
-        _ = kwargs
+        self.calls.append(kwargs)
         if self.should_fail:
             raise RuntimeError("boom")
         return self.payload
@@ -48,6 +49,17 @@ class GateTestCase(unittest.TestCase):
 
         self.assertFalse(decision.need_context)
         self.assertIn("不可用", decision.reason)
+
+    def test_decide_uses_stricter_json_only_prompt(self) -> None:
+        client = _FakeModelClient({"need_context": True, "reason": "需要上下文"})
+        gate = Gate(model_client=client)
+
+        decision = asyncio.run(gate.decide("请解释 Planner.create_plan 的职责"))
+
+        self.assertTrue(decision.need_context)
+        self.assertEqual(client.calls[0]["max_tokens"], 160)
+        self.assertIn("禁止输出解释", client.calls[0]["system_prompt"])
+        self.assertIn("只返回一行 JSON", client.calls[0]["user_prompt"])
 
 
 if __name__ == "__main__":

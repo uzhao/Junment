@@ -142,6 +142,17 @@ class OpenAICompatibleClient:
                     texts.append(item["text"])
             if texts:
                 return "\n".join(texts)
+        reasoning = message.get("reasoning")
+        if isinstance(reasoning, str) and reasoning.strip():
+            return reasoning
+        reasoning_details = message.get("reasoning_details")
+        if isinstance(reasoning_details, list):
+            texts = []
+            for item in reasoning_details:
+                if isinstance(item, dict) and isinstance(item.get("text"), str) and item["text"].strip():
+                    texts.append(item["text"])
+            if texts:
+                return "\n".join(texts)
         raise ValueError("Unsupported message content format.")
 
     def _extract_json_payload(self, content: str) -> dict[str, Any]:
