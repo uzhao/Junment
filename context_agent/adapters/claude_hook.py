@@ -58,8 +58,4 @@ def _pick_prompt(data: dict[str, Any]) -> str:
         content = message.get("content")
         if isinstance(content, str):
             return content
-
-    transcript_path = data.get("transcriptPath") or data.get("transcript_path")
-    if isinstance(transcript_path, str):
-        return transcript_path
     return ""

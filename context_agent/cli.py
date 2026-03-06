@@ -11,6 +11,7 @@ from mcp_agent.logging.transport import AsyncEventBus
 from context_agent.adapters.claude_hook import build_hook_output, dump_hook_output, parse_hook_payload
 from context_agent.app import build_app
 from context_agent.config import AppConfig
+from context_agent.debug_log import append_hook_log
 from context_agent.logging_config import configure_logging
 from context_agent.workflows.build_context import build_context
 
@@ -34,15 +35,48 @@ async def async_main(argv: list[str] | None = None) -> int:
 
     configure_logging()
     raw_payload = _read_payload(args.input)
+    append_hook_log("cli_input", {"input_path": args.input, "raw_payload": raw_payload})
     hook_input = parse_hook_payload(raw_payload, fallback_cwd=args.cwd)
+    append_hook_log(
+        "parsed_hook",
+        {
+            "prompt": hook_input.prompt,
+            "cwd": hook_input.cwd,
+            "event_name": hook_input.event_name,
+            "session_id": hook_input.session_id,
+        },
+    )
     app = build_app(hook_input.cwd, _build_config(args))
     try:
-        async with app.mcp_app.run():
-            pack = await build_context(hook_input, app)
-    finally:
-        await _shutdown_mcp_runtime()
+        try:
+            async with app.mcp_app.run():
+                pack = await build_context(hook_input, app)
+        finally:
+            await _shutdown_mcp_runtime()
+    except Exception as exc:
+        append_hook_log("cli_error", {"error": repr(exc)})
+        raise
     output = build_hook_output(pack)
-    sys.stdout.write(dump_hook_output(output))
+    output_json = dump_hook_output(output)
+    append_hook_log(
+        "hook_output",
+        {
+            "task_type": pack.task_type,
+            "summary": pack.summary,
+            "entries": [
+                {
+                    "path": entry.path,
+                    "score": entry.score,
+                    "relation_type": entry.relation_type,
+                    "reason": entry.reason,
+                }
+                for entry in pack.entries
+            ],
+            "additional_context": pack.additional_context,
+            "output_json": output_json,
+        },
+    )
+    sys.stdout.write(output_json)
     sys.stdout.write("\n")
     return 0
 

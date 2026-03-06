@@ -314,6 +314,8 @@ Claude Code 官方 `UserPromptSubmit` hook 输入里，常见字段包括：
 
 另外需要注意：
 
+- `transcript_path` 只作为元信息保留，**不会**被当作 prompt fallback
+- 如果 hook payload 里没有真实 `prompt`，CLI 会把解析结果写入 `/tmp/hooks.log` 便于排查
 - `--input` 参数接收的是 **JSON 文件路径**
 - 不是把 JSON 字符串直接塞给 `--input`
 

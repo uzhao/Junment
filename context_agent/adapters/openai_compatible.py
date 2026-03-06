@@ -7,6 +7,7 @@ from typing import Any
 from urllib import request
 
 from context_agent.config import AppConfig
+from context_agent.debug_log import append_hook_log
 
 
 @dataclass(slots=True)
@@ -84,11 +85,41 @@ class OpenAICompatibleClient:
             "Authorization": f"Bearer {self.api_key}",
         }
         http_request = request.Request(request_url, data=request_data, headers=headers, method="POST")
-        with request.urlopen(http_request, timeout=self.timeout_seconds) as response:
-            body = response.read().decode("utf-8")
-        response_json = json.loads(body)
-        content = self._extract_message_content(response_json)
-        return self._extract_json_payload(content)
+        append_hook_log(
+            "llm_request",
+            {
+                "model": model,
+                "request_url": request_url,
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            },
+        )
+
+        body = ""
+        try:
+            with request.urlopen(http_request, timeout=self.timeout_seconds) as response:
+                body = response.read().decode("utf-8")
+            append_hook_log("llm_response", {"model": model, "response_body": body})
+            response_json = json.loads(body)
+            content = self._extract_message_content(response_json)
+            parsed = self._extract_json_payload(content)
+            append_hook_log(
+                "llm_parsed_response",
+                {"model": model, "message_content": content, "json_payload": parsed},
+            )
+            return parsed
+        except Exception as exc:
+            append_hook_log(
+                "llm_error",
+                {
+                    "model": model,
+                    "response_body": body,
+                    "error": repr(exc),
+                },
+            )
+            raise
 
     def _build_chat_completions_url(self) -> str:
         assert self.base_url is not None

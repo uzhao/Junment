@@ -27,6 +27,23 @@ class ClaudeHookAdapterTestCase(unittest.TestCase):
         self.assertEqual(hook_input.event_name, "UserPromptSubmit")
         self.assertEqual(hook_input.session_id, "abc123")
 
+    def test_parse_hook_payload_does_not_use_transcript_path_as_prompt(self) -> None:
+        raw_payload = json.dumps(
+            {
+                "session_id": "abc123",
+                "transcript_path": "/tmp/session.jsonl",
+                "cwd": "/workspace/demo",
+                "hook_event_name": "UserPromptSubmit",
+            },
+            ensure_ascii=False,
+        )
+
+        hook_input = parse_hook_payload(raw_payload)
+
+        self.assertEqual(hook_input.prompt, "")
+        self.assertEqual(hook_input.cwd, "/workspace/demo")
+        self.assertEqual(hook_input.event_name, "UserPromptSubmit")
+
 
 if __name__ == "__main__":
     unittest.main()
