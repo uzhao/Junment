@@ -136,7 +136,9 @@
 
 ## Claude Code hook 最小接入
 
-在项目根目录创建 `.claude/settings.json`：
+仓库根目录提供了一个可直接参考的示例文件：`settings.json.example`。
+
+实际使用时，把它复制到**目标项目**根目录的 `.claude/settings.json`，内容可以先从下面这个最小版本开始：
 
 ```json
 {
@@ -146,7 +148,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && JUNMENT_LLM_API_KEY=\"$OPENROUTER_API_KEY\" uv run python -m context_agent.cli",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && JUNMENT_LLM_API_KEY=\"$OPENROUTER_API_KEY\" uvx --from git+https://github.com/uzhao/Junment.git junment-context-agent",
             "timeout": 30
           }
         ]
@@ -160,7 +162,7 @@
 
 - `UserPromptSubmit` 不支持 `matcher`，每次提交用户问题都会触发
 - `CLAUDE_PROJECT_DIR` 用来确保命令在当前项目根目录运行
-- 如果你更喜欢脚本入口，也可以改成 `uv run junment-context-agent`
+- 这个最小示例不要求系统预先安装 `junment-context-agent`，会直接通过 GitHub 拉起
 - 最小可用方式是只传 `API key`；如果要换 provider 或模型，再显式覆盖 `base_url` / `model`
 - 如果你已经在外层 shell 导出了环境变量，也可以继续全部用环境变量
 
@@ -171,60 +173,17 @@
 - 把 hook 配置写到**目标项目**根目录的 `.claude/settings.json`
 - 这里的“目标项目”是指：你平时在 Claude Code 里实际提问和编码的那个仓库
 - `CLAUDE_PROJECT_DIR` 会指向这个目标项目根目录，因此命令里通常先 `cd "$CLAUDE_PROJECT_DIR"`
+- 本仓库根目录的 `settings.json.example` 可以直接作为复制模板
 
-#### 方式 1：当前项目里就放着这个工具仓库
-
-适合场景：
-
-- 你正在开发或调试 `Junment`
-- 或者你就是把这个工具直接放在当前 Claude Code 打开的仓库里使用
-
-这种情况下，最直接的写法就是继续用 `uv run`：
-
-```json
-{
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && JUNMENT_LLM_API_KEY=\"$OPENROUTER_API_KEY\" uv run python -m context_agent.cli",
-            "timeout": 30
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-如果你已经配置了脚本入口，也可以改成：
-
-```json
-{
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && JUNMENT_LLM_API_KEY=\"$OPENROUTER_API_KEY\" uv run junment-context-agent",
-            "timeout": 30
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-#### 方式 2：工具仓库独立维护，通过 GitHub + `uvx` 临时运行
+#### 方式 1：推荐，直接通过 GitHub + `uvx` 使用
 
 适合场景：
 
-- 你不想在每个项目里都 checkout 一份 `Junment`
-- 想直接从 GitHub 拉起最新版本试用
+- 你不想先手动安装工具
+- 想直接从 GitHub 拉起使用
+- 希望配置最简单、最方便复制到其他项目
+
+这种方式不会要求系统里先有 `junment-context-agent`，推荐优先使用：
 
 ```json
 {
@@ -234,7 +193,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && JUNMENT_LLM_API_KEY=\"$OPENROUTER_API_KEY\" uvx --from git+https://github.com/<your-user>/Junment.git junment-context-agent",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && JUNMENT_LLM_API_KEY=\"$OPENROUTER_API_KEY\" uvx --from git+https://github.com/uzhao/Junment.git junment-context-agent",
             "timeout": 30
           }
         ]
@@ -244,17 +203,24 @@
 }
 ```
 
-#### 方式 3：先安装成 tool，再在 Claude Code 里直接调用
+#### 方式 2：先安装到本地，再在 Claude Code 里直接调用
 
 适合场景：
 
 - 你长期使用这个工具
 - 不希望每次 hook 都写很长的 `uvx --from ...`
+- 想在本地直接用固定命令
 
 先安装：
 
 ```bash
-uv tool install git+https://github.com/<your-user>/Junment.git
+uv tool install git+https://github.com/uzhao/Junment.git
+```
+
+安装后可以先在本地确认命令可用：
+
+```bash
+junment-context-agent --help
 ```
 
 然后在 `.claude/settings.json` 里直接写：
@@ -277,11 +243,56 @@ uv tool install git+https://github.com/<your-user>/Junment.git
 }
 ```
 
+#### 方式 3：开发/调试 `Junment` 本身时，直接用当前仓库 `uv run`
+
+适合场景：
+
+- 你正在开发或调试 `Junment`
+- 这个工具仓库本身就在当前工作区里
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && JUNMENT_LLM_API_KEY=\"$OPENROUTER_API_KEY\" uv run python -m context_agent.cli",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+如果你更喜欢脚本入口，也可以改成：
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && JUNMENT_LLM_API_KEY=\"$OPENROUTER_API_KEY\" uv run junment-context-agent",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
 #### 怎么选
 
-- 开发/调试 `Junment` 本身：优先 `uv run`
-- 临时试用、希望直接走 GitHub：优先 `uvx --from git+https://...`
+- 默认推荐：`uvx --from git+https://github.com/uzhao/Junment.git ...`
 - 长期稳定使用：优先 `uv tool install` 后直接调用 `junment-context-agent`
+- 开发/调试 `Junment` 本身：优先 `uv run`
 
 ## 输入约定
 
@@ -380,19 +391,27 @@ printf '%s' '{"prompt":"请解释 Planner.create_plan 的职责","cwd":"/path/to
 临时运行：
 
 ```bash
-uvx --from git+https://github.com/<your-user>/Junment.git junment-context-agent --help
+uvx --from git+https://github.com/uzhao/Junment.git junment-context-agent --help
 ```
+
+`uvx` 是 `uv tool run` 的别名。按照 `uv` 官方文档，运行工具时会把对应虚拟环境放进 `uv` 的缓存目录里管理，所以通常不会每次都从零重新下载和构建。不过它仍然更适合“直接运行一个工具”的场景；如果你准备长期使用，下面的本地安装方式会更稳定、更直观。
 
 安装为本地工具：
 
 ```bash
-uv tool install git+https://github.com/<your-user>/Junment.git
+uv tool install git+https://github.com/uzhao/Junment.git
+```
+
+安装后本地使用：
+
+```bash
+junment-context-agent --help
 ```
 
 作为其他项目依赖：
 
 ```bash
-uv add git+https://github.com/<your-user>/Junment.git
+uv add git+https://github.com/uzhao/Junment.git
 ```
 
 当前 `basedpyright` 已经是正式运行时依赖，因此通过 GitHub + `uvx` / `uv tool install` 安装后，Python 的 `LSP symbol` discovery 所需 `basedpyright-langserver` 会随对应的 `uv` 工具环境一起可用，不需要用户预先全局安装。TS/JS 则会在本机已安装 `typescript-language-server`，且环境中可用 `typescript`（通常来自项目本地依赖或全局安装）时自动启用；未满足时会静默降级，不影响整体流程。

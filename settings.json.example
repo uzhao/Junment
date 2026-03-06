@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && JUNMENT_LLM_API_KEY=\"$OPENROUTER_API_KEY\" uvx --from git+https://github.com/uzhao/Junment.git junment-context-agent",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
