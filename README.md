@@ -6,14 +6,15 @@
 
 ## 当前状态
 
-- 已接入真实 `mcp-agent` runtime
 - 已提供可执行 CLI：`context_agent.cli`
 - 已兼容 Claude Code `UserPromptSubmit` 官方 JSON 输入
 - 已接入 OpenAI-compatible provider 调用链
 - 已支持 `gate_model` / `judge_model` / `summary_model` 分离配置
-- 已实现异步并行 LLM rerank
+- 已实现 LLM planner 从文件树语义选文件，替代旧的启发式提取
+- 已实现超长文件基于 `match_terms` 的命中窗口裁剪
+- 已实现 judge 基于完整文件/裁剪文件独立裁片段并评分，支持启发式回退
+- 已实现异步并行 judge 评分
 - 已将 `basedpyright` 收紧为正式运行时依赖，GitHub + `uv` 安装时默认具备 Python LSP discovery 能力，并支持可选的 TS/JS LSP discovery
-- 已修复 CLI 输出 hook JSON 后不退出的问题
 
 ## 当前工作流
 
@@ -21,24 +22,30 @@
 
 1. `gate`
    - 用小模型判断当前问题是否需要额外仓库上下文
+   - 附带输出可选的粗粒度 `grep_hints`
    - 例如：`commit` 这类短操作通常会被判为不需要上下文
-2. `planner`
-   - 目前仍是本地轻量提取
-   - 从 prompt 中提取路径、symbol、搜索词、任务类型
-3. `discovery`
-   - 使用本地确定性工具找候选：
-     - 显式路径
-     - LSP symbol
-     - grep
-     - docs
-4. `judge`
-   - 对每个候选做独立评分
-   - 在 LLM workflow 已启用时，并行异步调用 `judge_model` 做 rerank
-5. `selection`
+2. `repository snapshot`
+   - 收集代码与文档文件树
+   - 基于 `grep_hints` 生成命中文件名列表
+3. `planner`
+   - LLM 文件选择器
+   - 输入：用户问题、文件树、grep 命中的文件名
+   - 输出：最多 `6` 个候选文件，以及每个文件的选择原因和 `match_terms`
+4. `file loader`
+   - 读取 planner 选中的文件
+   - 小文件直接全量送 judge
+   - 大文件按命中窗口裁剪，生成带行号和区间标记的拼接内容
+5. `judge`
+   - 输入整个问题和单个完整文件/裁剪文件
+   - 并行异步调用 `judge_model` 做相关性评分、片段裁剪和摘录生成
+   - LLM 不可用时回退到启发式评分
+6. `selection`
    - 根据阈值、去重和 `top_k` 选出最终候选
-6. `summarizer`
-   - 在 LLM workflow 已启用时，使用 `summary_model` 对最终候选做压缩总结
-   - 再拼装成 `additionalContext` 返回给 Claude Code
+7. `context pack builder`
+   - 把 judge 结果整理成统一的 `ContextPack`
+8. `summarizer`
+   - 使用 `summary_model` 对最终候选做压缩总结
+   - 拼装成 `additionalContext` 返回给 Claude Code
 
 ## Provider 配置
 
@@ -105,14 +112,14 @@
 
 ### 本地选择参数
 
-- `CONTEXT_AGENT_MAX_CANDIDATES`
-  - discovery 阶段候选上限，默认 `12`
+- `CONTEXT_AGENT_PLANNER_MAX_SELECTED_FILES`
+  - planner 选出的候选文件数上限，默认 `6`
+- `CONTEXT_AGENT_MAX_FILE_LINES_FOR_JUDGE`
+  - 超长文件裁剪阈值，超过此行数的文件会基于 `match_terms` 裁剪后再送 judge，默认 `10000`
 - `CONTEXT_AGENT_SCORE_THRESHOLD`
   - 最终保留阈值，默认 `55`
 - `CONTEXT_AGENT_TOP_K`
   - 最终注入条目上限，默认 `6`
-- `CONTEXT_AGENT_MAX_EXCERPT_LINES`
-  - 文件摘录最大行数，默认 `60`
 
 ## 启用条件与短路行为
 
@@ -128,9 +135,7 @@
 如果不满足这些条件，workflow 会：
 
 - 直接返回空 `additionalContext`
-- 不进入 discovery
-- 不进入 rerank
-- `summary` 中会写明是 provider 或 model 配置不完整
+- 不进入 LLM planner / judge / summarizer 流程
 
 这是一个全新项目，当前**不保留旧环境变量兼容说明**。
 
@@ -439,15 +444,17 @@ claude --debug
 
 1. Claude Code 触发 `UserPromptSubmit`
 2. hook 调用 `context_agent.cli`
-3. gate 判断当前问题是否需要上下文
-4. 本地 deterministic discovery 收集候选
-5. 并行 LLM rerank 逐候选评分
-6. summarize 压缩 top k
-7. 返回 `additionalContext`
-8. Claude 在带上下文的前提下继续回答
+3. gate 判断当前问题是否需要上下文，输出 `grep_hints`
+4. repository snapshot 收集文件树与 grep 命中文件
+5. LLM planner 从文件树中选出最相关的候选文件
+6. file loader 读取文件并对超长文件做裁剪
+7. 并行 LLM judge 逐文件评分与片段裁剪
+8. selection 阈值过滤并选出 top k
+9. summarizer 压缩最终结果
+10. 返回 `additionalContext`
+11. Claude 在带上下文的前提下继续回答
 
 ## 当前已知边界
 
-- `planner` 目前仍是本地轻量提取，不是远端 LLM planner
 - 真实 provider 的端到端效果依赖所选模型质量与稳定性
-- 当前默认目标是“给 Claude Code 补充更高价值的上下文”，而不是替代 Claude Code 自身的仓库理解能力
+- 当前默认目标是”给 Claude Code 补充更高价值的上下文”，而不是替代 Claude Code 自身的仓库理解能力
