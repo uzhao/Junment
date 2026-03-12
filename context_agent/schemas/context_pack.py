@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from context_agent.schemas.score import LineRange
+
 
 @dataclass(slots=True)
 class ContextEntry:
@@ -12,6 +14,7 @@ class ContextEntry:
     relation_type: str
     reason: str
     excerpt: str = ""
+    spans: list[LineRange] = field(default_factory=list)
 
 
 @dataclass(slots=True)

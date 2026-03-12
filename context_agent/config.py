@@ -24,6 +24,8 @@ class AppConfig:
     score_threshold: int = 55
     top_k: int = 6
     max_excerpt_lines: int = 60
+    planner_max_selected_files: int = 6
+    max_file_lines_for_judge: int = 10000
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -41,6 +43,8 @@ class AppConfig:
             score_threshold=int(os.getenv("CONTEXT_AGENT_SCORE_THRESHOLD", "55")),
             top_k=int(os.getenv("CONTEXT_AGENT_TOP_K", "6")),
             max_excerpt_lines=int(os.getenv("CONTEXT_AGENT_MAX_EXCERPT_LINES", "60")),
+            planner_max_selected_files=int(os.getenv("CONTEXT_AGENT_PLANNER_MAX_SELECTED_FILES", "6")),
+            max_file_lines_for_judge=int(os.getenv("CONTEXT_AGENT_MAX_FILE_LINES_FOR_JUDGE", "10000")),
         )
 
     def has_provider_configuration(self) -> bool:

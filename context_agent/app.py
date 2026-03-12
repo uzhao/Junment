@@ -17,13 +17,10 @@ from context_agent.agents.judge import Judge
 from context_agent.agents.planner import Planner
 from context_agent.agents.summarizer import Summarizer
 from context_agent.config import AppConfig
-from context_agent.services.candidate_discovery import CandidateDiscoveryService
 from context_agent.services.context_pack_builder import ContextPackBuilder
+from context_agent.services.file_loader import FileLoaderService
+from context_agent.services.repository_snapshot import RepositorySnapshotService
 from context_agent.services.score_selection import ScoreSelectionService
-from context_agent.tools.doc_locator import DocLocator
-from context_agent.tools.file_reader import FileReader
-from context_agent.tools.grep_search import GrepSearchTool
-from context_agent.tools.lsp_client import LSPClient
 
 
 @dataclass(slots=True)
@@ -36,7 +33,8 @@ class ContextAgentApp:
     planner: Planner
     judge: Judge
     summarizer: Summarizer
-    discovery_service: CandidateDiscoveryService
+    snapshot_service: RepositorySnapshotService
+    file_loader_service: FileLoaderService
     selection_service: ScoreSelectionService
     context_pack_builder: ContextPackBuilder
 
@@ -46,10 +44,6 @@ def build_app(workspace_root: str | Path, config: AppConfig | None = None) -> Co
 
     _ = workspace_root
     app_config = config or AppConfig.from_env()
-    reader = FileReader(max_excerpt_lines=app_config.max_excerpt_lines)
-    docs = DocLocator(reader=reader)
-    grep_tool = GrepSearchTool(reader=reader)
-    lsp_client = LSPClient()
     model_client = OpenAICompatibleClient.from_config(app_config)
     mcp_app = _build_mcp_app()
 
@@ -57,15 +51,15 @@ def build_app(workspace_root: str | Path, config: AppConfig | None = None) -> Co
         config=app_config,
         mcp_app=mcp_app,
         gate=Gate(model_client=model_client),
-        planner=Planner(model_client=model_client),
-        judge=Judge(model_client=model_client, reader=reader),
+        planner=Planner(
+            model_client=model_client,
+            max_selected_files=app_config.planner_max_selected_files,
+        ),
+        judge=Judge(model_client=model_client),
         summarizer=Summarizer(model_client=model_client),
-        discovery_service=CandidateDiscoveryService(
-            reader=reader,
-            grep_tool=grep_tool,
-            doc_locator=docs,
-            lsp_client=lsp_client,
-            max_candidates=app_config.max_candidates,
+        snapshot_service=RepositorySnapshotService(),
+        file_loader_service=FileLoaderService(
+            max_lines=app_config.max_file_lines_for_judge,
         ),
         selection_service=ScoreSelectionService(
             threshold=app_config.score_threshold,

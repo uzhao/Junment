@@ -50,12 +50,16 @@ class Summarizer:
         entry_lines: list[str] = []
         for entry in pack.entries[:6]:
             excerpt = "\\n".join(entry.excerpt.splitlines()[:6]) if entry.excerpt else "<empty>"
+            span_str = ""
+            if entry.spans:
+                span_str = ", ".join(f"{s.start_line}-{s.end_line}" for s in entry.spans)
             entry_lines.extend(
                 [
                     f"路径：{entry.path}",
                     f"分数：{entry.score}",
                     f"关系：{entry.relation_type}",
                     f"原因：{entry.reason}",
+                    *(([f"关键行范围：{span_str}"] if span_str else [])),
                     f"摘录：{excerpt}",
                     "",
                 ]

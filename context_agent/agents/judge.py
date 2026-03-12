@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-import re
-
 from context_agent.adapters.openai_compatible import OpenAICompatibleClient
-from context_agent.schemas.candidate import CandidateItem
-from context_agent.schemas.score import CandidateScore
-from context_agent.tools.file_reader import FileReader
+from context_agent.schemas.candidate import FileView
+from context_agent.schemas.score import JudgeResult, LineRange
+from context_agent.schemas.search_plan import PlannedFile
 
-_JUDGE_SYSTEM_PROMPT = """你负责对单个候选文件做独立相关性评分。
+_JUDGE_SYSTEM_PROMPT = """你负责对单个文件做独立相关性评分并裁出重点片段。
 
-只根据用户问题、候选来源、候选路径、候选摘录判断该候选是否值得注入 Claude Code 上下文。
+输入包含用户问题和单个完整文件或裁剪文件视图。
 
 只输出 JSON，格式如下：
-{"score": 0, "relation_type": "core implementation", "reason": "..."}
+{"score": 88, "relation_type": "core implementation", "reason": "...", "spans": [{"start_line": 40, "end_line": 68}], "excerpt": "..."}
 
 要求：
 - score 为 0 到 100 的整数
@@ -25,143 +23,131 @@ _JUDGE_SYSTEM_PROMPT = """你负责对单个候选文件做独立相关性评分
   - documentation
   - weakly related
 - reason 用一句简短中文说明为什么相关或不相关
+- spans 为该文件中与问题最相关的行范围列表，每个元素包含 start_line 和 end_line
+- excerpt 为最关键的代码片段文本（最多 30 行），直接从文件内容中截取
 """
 
 
 class Judge:
-    """负责逐候选独立评分。"""
+    """基于完整文件或裁剪视图做独立相关性判断、片段裁剪和打分。"""
 
-    def __init__(
-        self,
-        model_client: OpenAICompatibleClient | None = None,
-        reader: FileReader | None = None,
-    ) -> None:
+    def __init__(self, model_client: OpenAICompatibleClient | None = None) -> None:
         self.model_client = model_client
-        self.reader = reader or FileReader()
 
-    def score_candidate(self, prompt: str, candidate: CandidateItem) -> CandidateScore:
-        """使用启发式规则给候选打分。"""
-
-        prompt_terms = self._extract_prompt_terms(prompt)
-        matched_terms = [term for term in candidate.matched_terms if term.lower() in prompt.lower()]
-        path_lower = candidate.path.lower()
-        content_lower = candidate.content.lower()
-        content_overlap = [term for term in prompt_terms if len(term) >= 3 and term in content_lower]
-        base_score = 18 if candidate.source == "doc" else 20
-        base_score += min(len(matched_terms) * 12, 36)
-
-        if candidate.source == "explicit_path":
-            base_score += 35
-        elif candidate.source == "lsp_symbol":
-            base_score += 24
-        elif candidate.source == "grep" and len(matched_terms) >= 2:
-            base_score += 6
-        if matched_terms and any(token in path_lower for token in ["readme", "docs", "architecture", "design", "rfc", "plan"]):
-            base_score += 8
-        if content_overlap:
-            base_score += min(len(content_overlap) * 4, 12)
-        if candidate.source == "doc" and not matched_terms:
-            base_score = min(base_score, 24)
-
-        base_score = min(base_score, 100)
-        relation_type = self._classify_relation(candidate)
-        if relation_type == "test" and not self._prompt_requests_tests(prompt.lower()):
-            base_score = max(base_score - 20, 0)
-        spans = ["1-40"] if candidate.content else []
-        reason_terms = ", ".join(matched_terms[:4]) if matched_terms else candidate.reason
-        reason = f"Matched by {candidate.source}: {reason_terms}".strip()
-        return CandidateScore(
-            path=candidate.path,
-            score=base_score,
-            relation_type=relation_type,
-            reason=reason,
-            recommended_spans=spans,
-            source=candidate.source,
-        )
-
-    async def score_candidate_async(self, prompt: str, candidate: CandidateItem) -> CandidateScore:
-        """优先使用 LLM 重排；不可用时回退到启发式评分。"""
+    async def judge_file(
+        self,
+        prompt: str,
+        planned_file: PlannedFile,
+        file_view: FileView,
+    ) -> JudgeResult:
+        """对单个文件做相关性判断。优先 LLM，不可用时回退启发式。"""
 
         if self.model_client is None or not self.model_client.can_call(self.model_client.judge_model):
-            return self.score_candidate(prompt, candidate)
+            return self._heuristic_judge(planned_file, file_view)
 
-        heuristic_score = self.score_candidate(prompt, candidate)
-        user_prompt = self._build_user_prompt(prompt, candidate, heuristic_score)
+        user_prompt = self._build_user_prompt(prompt, planned_file, file_view)
         try:
             payload = await self.model_client.complete_json(
                 system_prompt=_JUDGE_SYSTEM_PROMPT,
                 user_prompt=user_prompt,
                 model=self.model_client.judge_model,
-                max_tokens=220,
+                max_tokens=500,
             )
         except Exception:
-            return heuristic_score
+            return self._heuristic_judge(planned_file, file_view)
 
-        score = self._coerce_score(payload.get("score"), heuristic_score.score)
-        relation_type = self._coerce_relation_type(payload.get("relation_type"), heuristic_score.relation_type)
-        reason = str(payload.get("reason") or heuristic_score.reason)
-        return CandidateScore(
-            path=candidate.path,
-            score=score,
-            relation_type=relation_type,
-            reason=reason,
-            recommended_spans=heuristic_score.recommended_spans,
-            source=candidate.source,
-        )
-
-    def _classify_relation(self, candidate: CandidateItem) -> str:
-        lowered = candidate.path.lower()
-        if "test" in lowered:
-            return "test"
-        if any(token in lowered for token in ["readme", "docs", "architecture", ".md"]):
-            return "documentation"
-        if any(token in lowered for token in ["config", "settings", "toml", "yaml", "yml"]):
-            return "config / rule"
-        if candidate.source in {"explicit_path", "lsp_symbol"}:
-            return "core implementation"
-        return "weakly related"
-
-    def _extract_prompt_terms(self, prompt: str) -> list[str]:
-        tokens = re.findall(r"[A-Za-z0-9_./-]{3,}|[\u4e00-\u9fff]{2,}", prompt.lower())
-        terms: list[str] = []
-        for token in tokens:
-            if token not in terms:
-                terms.append(token)
-        return terms[:16]
-
-    def _prompt_requests_tests(self, lowered_prompt: str) -> bool:
-        return any(token in lowered_prompt for token in ["test", "tests", "测试", "单测", "用例"])
+        return self._parse_llm_response(payload, planned_file, file_view)
 
     def _build_user_prompt(
         self,
         prompt: str,
-        candidate: CandidateItem,
-        heuristic_score: CandidateScore,
+        planned_file: PlannedFile,
+        file_view: FileView,
     ) -> str:
-        excerpt = candidate.content.strip()
-        if excerpt:
-            excerpt = "\n".join(excerpt.splitlines()[:20])
-        else:
-            excerpt = "<empty>"
-        return (
-            f"用户问题：\n{prompt}\n\n"
-            f"候选路径：{candidate.path}\n"
-            f"候选来源：{candidate.source}\n"
-            f"来源理由：{candidate.reason}\n"
-            f"启发式参考分：{heuristic_score.score}\n"
-            f"启发式关系：{heuristic_score.relation_type}\n"
-            f"候选摘录：\n{excerpt}\n\n"
-            "请只返回 JSON。"
+        lines = [
+            f"用户问题：\n{prompt}\n",
+            f"文件路径：{file_view.path}",
+            f"总行数：{file_view.total_lines}",
+            f"是否裁剪：{'是' if file_view.truncated else '否'}",
+            f"选择理由：{planned_file.reason}",
+            "",
+            "文件内容：",
+            file_view.content_with_line_numbers or "<empty>",
+            "",
+            "请只返回 JSON。",
+        ]
+        return "\n".join(lines)
+
+    def _parse_llm_response(
+        self,
+        payload: dict,
+        planned_file: PlannedFile,
+        file_view: FileView,
+    ) -> JudgeResult:
+        score = self._coerce_score(payload.get("score"))
+        relation_type = self._coerce_relation_type(payload.get("relation_type"))
+        reason = str(payload.get("reason") or planned_file.reason)
+        spans = self._parse_spans(payload.get("spans"), file_view.total_lines)
+        excerpt = str(payload.get("excerpt") or "")
+        # 限制 excerpt 最多 30 行
+        excerpt_lines = excerpt.splitlines()
+        if len(excerpt_lines) > 30:
+            excerpt = "\n".join(excerpt_lines[:30])
+
+        return JudgeResult(
+            path=file_view.path,
+            score=score,
+            relation_type=relation_type,
+            reason=reason,
+            spans=spans,
+            excerpt=excerpt,
+            source="planner",
         )
 
-    def _coerce_score(self, value: object, fallback: int) -> int:
+    def _heuristic_judge(self, planned_file: PlannedFile, file_view: FileView) -> JudgeResult:
+        """启发式评分回退。"""
+
+        path_lower = file_view.path.lower()
+        content_lower = file_view.content_with_line_numbers.lower()
+
+        base_score = 40
+        hit_count = sum(1 for t in planned_file.match_terms if t.lower() in content_lower)
+        base_score += min(hit_count * 10, 30)
+        if planned_file.priority <= 2:
+            base_score += 15
+        elif planned_file.priority <= 4:
+            base_score += 8
+
+        base_score = min(base_score, 100)
+        relation_type = self._classify_by_path(path_lower)
+
+        return JudgeResult(
+            path=file_view.path,
+            score=base_score,
+            relation_type=relation_type,
+            reason=planned_file.reason,
+            spans=[],
+            excerpt="",
+            source="planner",
+        )
+
+    def _classify_by_path(self, path_lower: str) -> str:
+        if "test" in path_lower:
+            return "test"
+        if any(t in path_lower for t in ["readme", "docs", "architecture", ".md"]):
+            return "documentation"
+        if any(t in path_lower for t in ["config", "settings", "toml", "yaml", "yml"]):
+            return "config / rule"
+        return "core implementation"
+
+    def _coerce_score(self, value: object) -> int:
         try:
-            score = int(value)
+            score = int(value)  # type: ignore[arg-type]
         except (TypeError, ValueError):
-            return fallback
+            return 50
         return max(0, min(score, 100))
 
-    def _coerce_relation_type(self, value: object, fallback: str) -> str:
+    def _coerce_relation_type(self, value: object) -> str:
         allowed = {
             "error origin",
             "core implementation",
@@ -172,4 +158,22 @@ class Judge:
             "weakly related",
         }
         relation_type = str(value or "").strip()
-        return relation_type if relation_type in allowed else fallback
+        return relation_type if relation_type in allowed else "weakly related"
+
+    def _parse_spans(self, raw_spans: object, total_lines: int) -> list[LineRange]:
+        if not isinstance(raw_spans, list):
+            return []
+        spans: list[LineRange] = []
+        for item in raw_spans:
+            if not isinstance(item, dict):
+                continue
+            try:
+                start = int(item.get("start_line", 0))  # type: ignore[arg-type]
+                end = int(item.get("end_line", 0))  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+            start = max(1, start)
+            end = min(total_lines, end) if total_lines > 0 else end
+            if start <= end:
+                spans.append(LineRange(start_line=start, end_line=end))
+        return spans

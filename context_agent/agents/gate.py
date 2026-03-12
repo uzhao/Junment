@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from context_agent.adapters.openai_compatible import OpenAICompatibleClient
 
@@ -12,7 +12,7 @@ _GATE_SYSTEM_PROMPT = """你是 Claude Code 前置上下文编排器里的 gate�
 禁止输出解释、前言、代码块或思考过程。
 
 只输出一行 JSON，格式如下：
-{"need_context": true, "reason": "..."}
+{"need_context": true, "reason": "...", "grep_hints": ["planner", "judge"]}
 
 示例 1：
 用户问题：commit
@@ -28,6 +28,7 @@ _GATE_SYSTEM_PROMPT = """你是 Claude Code 前置上下文编排器里的 gate�
 class GateDecision:
     need_context: bool
     reason: str = ""
+    grep_hints: list[str] = field(default_factory=list)
 
 
 class Gate:
@@ -53,4 +54,6 @@ class Gate:
 
         need_context = bool(payload.get("need_context", False))
         reason = str(payload.get("reason") or "")
-        return GateDecision(need_context=need_context, reason=reason)
+        raw_hints = payload.get("grep_hints") or []
+        grep_hints = [str(h) for h in raw_hints if h] if isinstance(raw_hints, list) else []
+        return GateDecision(need_context=need_context, reason=reason, grep_hints=grep_hints)
